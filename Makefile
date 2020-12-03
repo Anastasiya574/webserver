@@ -1,14 +1,17 @@
-all: bin bin/web-server bin/web-client
+all: bin bin/server bin/client resource
 	
 bin:
 	mkdir bin
 
-bin/web-server: web-server.c
-	gcc web-server.c -o bin/web-server -Wall -Werror -lm -fsanitize=address,leak
+bin/server: server.c
+	gcc server.c -o bin/server -Wall -Werror -lm -fsanitize=address,leak
 
-bin/web-client: web-client.c
-	gcc web-client.c -o bin/web-client -Wall -Werror -lm -fsanitize=address,leak
+bin/client: client.c
+	gcc client.c -o bin/client -Wall -Werror -lm -fsanitize=address,leak
 
 clean:
-	rm bin/web-server bin/web-client
+	rm bin/server bin/client
 	rmdir bin
+
+resource: resource/cgi-source/hello-world.c
+	gcc resource/cgi-source/hello-world.c -o resource/cgi-bin/hello-world -Wall -Werror -lm -fsanitize=address,leak

@@ -6,9 +6,17 @@
   ```
   `git clone https://github.com/Anastasiya574/webserver`
   ```
-
  ## Compilation
   `make`
+
+ ## How to run program
+ ### server:
+  `./bin/server 5000 1`
+
+ ### client:
+  `./bin/client`
+ in terminal:
+  `127.0.0.1:5000/file.txt`
 
  ## Links
   * [main link and materials](http://mymath.info)

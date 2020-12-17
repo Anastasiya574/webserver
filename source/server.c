@@ -1,15 +1,20 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <unistd.h>
+#include<stdio.h>
+#include<string.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<sys/types.h>
+#include<sys/stat.h>
+#include<sys/socket.h>
+#include<arpa/inet.h>
+#include<netdb.h>
+#include<signal.h>
+#include<fcntl.h>
+#include<time.h>
 #include <sys/wait.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <string.h>
+
+#define MESSAGE 10000
+#define CONNMAX 1000
+#define BYTES 1024
 
 enum errors {
     OK,
@@ -20,199 +25,291 @@ enum errors {
     ERR_LISTEN
 };
 
-typedef struct {
-    char *ext;
-    char *mediatype;
-} data;
+char *ROOT;
+int listenfd, client_socket[CONNMAX];
+void error(char *);
+void freelist(char **);
+char* naming3(char * );
+char* naming2(char *);
+char** foo(char *);
+void init_socket(char *);
+void respond(int);
 
-data inf[] = {
-    {"txt", "text/plain" },
-    {"jpg", "image/jpg" },
-    {"png", "image/png" },
-    {"html","text/html" },
-};
+int main(int argc, char* argv[]) {
+    if (argc != 1) {
+        puts("Incorrect args.");
+        puts("./server");
+        puts("Example:");
+        puts("./server");
+        return ERR_INCORRECT_ARGS;
+    }
+	struct sockaddr_in client_address;
+	socklen_t addrlen;
+    char port[6];
+    strcpy(port, "5000");
+	ROOT = getenv("PWD");
+    int slot=0;
+	int i;
+	for (i=0; i<CONNMAX; i++)
+	client_socket[i]=-1;
+	init_socket(port);
+	while (1)
+	{
+		addrlen = sizeof(client_address);
+		client_socket[slot] = accept (listenfd, (struct sockaddr *) &client_address, &addrlen);
+		if (client_socket[slot] < 0)
+			error ("accept() error");
+		else
+		{
+			if (fork() == 0)
+			{
+				respond(slot);
+				exit(0);
+			}
+		}
+		while (client_socket[slot]!=-1) slot = (slot+1)%CONNMAX;
+	}
+	return OK;
+}
 
-int init_socket(int port);
-int interaction_client(int client_socket);
-char* get_request(int client_socket);
-char* get_path(char* message);
-void send_to_client(int client_socket, char* request_path, char* ext);
-void do_if_success(int client_socket, int fd, int index);
-void do_if_error(int client_socket);
-
-int init_socket(int port) {
-    // open socket, return socket descriptor
-    int server_socket = socket(PF_INET, SOCK_STREAM, 0);
+void init_socket(char *port) {
+	struct addrinfo hints, *res, *p;
+	memset (&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE;
+	if (getaddrinfo( NULL, port, &hints, &res) != 0) {
+		perror ("getaddrinfo() error");
+		exit(1);
+	}
+	// socket and bind
+	for (p = res; p!=NULL; p=p->ai_next) {
+		listenfd = socket (p->ai_family, p->ai_socktype, 0);
+		if (listenfd == -1) continue;
+		if (bind(listenfd, p->ai_addr, p->ai_addrlen) == 0) break;
+	}
+	if (p==NULL) {
+		perror ("socket() or bind()");
+		exit(1);
+	}
+	freeaddrinfo(res);
+	if ( listen (listenfd, 100000) != 0 ) {
+		perror("listen() error");
+		exit(1);
+	}
+}
+/*
+void init_socket(int port) {
+    int server_socket, socket_option = 1;
+    struct sockaddr_in server_address;
+    //open socket, return socket descriptor
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
         perror("Fail: open socket");
-        _exit(ERR_SOCKET);
+        exit(ERR_SOCKET);
     }
-
-    // set socket option
-    int socket_option = 1;
-    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &socket_option,
-              (socklen_t) sizeof(socket_option));
+    //set socket option
+    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &socket_option, (socklen_t) sizeof socket_option);
     if (server_socket < 0) {
         perror("Fail: set socket options");
-        _exit(ERR_SETSOCKETOPT);
+        exit(ERR_SETSOCKETOPT);
     }
-
-    // set socket address
-    struct sockaddr_in server_address;
+    //set socket address
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(port);
     server_address.sin_addr.s_addr = INADDR_ANY;
-    if (bind(server_socket, (struct sockaddr *) &server_address,
-       (socklen_t) sizeof(server_address)) < 0) {
+    if (bind(server_socket, (struct sockaddr *) &server_address, (socklen_t) sizeof server_address) < 0) {
         perror("Fail: bind socket address");
-        _exit(ERR_BIND);
+        exit(ERR_BIND);
     }
-
-    // listen mode start
+    //listen mode start
     if (listen(server_socket, 5) < 0) {
         perror("Fail: bind socket address");
-        _exit(ERR_LISTEN);
+        exit(ERR_LISTEN);
     }
-    return server_socket;
-}
+    return;
+} */
 
-char* get_request(int client_socket) {
-    char *message = NULL;
-    int size = 0;
-    char ch, prev = '\0';
-    while (read(client_socket, &ch, 1) > 0) {
-        size++;
-        message = realloc(message, size * sizeof(char));
-        message[size-1] = ch;
-        if (prev == '\n' && ch == '\r') {
-            read(client_socket, &ch, 1);
-            size++;
-            message = realloc(message, size * sizeof(char));
-            message[size-1] = ch;
-            break;
-        }
-        prev = ch;
+char** foo(char *name) {
+    char tmp[] = "/cgi-bin/prog?";
+    if (strlen(tmp) >= strlen(name)) {
+        return 0;
     }
-    size++;
-    message = realloc(message, size * sizeof(char));
-    message[size-1] = '\0';
-    return message;
-}
 
-int interaction_client(int client_socket) {
-    while(1) {
-        char *message = NULL;
-        message = get_request(client_socket);
-        if (message && strlen(message) != 0) {
-            puts(message);
-            char *request_path = get_path(message);
-            char *ext = strchr(request_path, '.');
-            if (ext != NULL) {
-                send_to_client(client_socket, request_path, ext + 1); 
-            } //else {
-           // }
-            free(message);
-        } else {
-            free(message);
-            break;
-        }
-    }
-    return 0;
-}
+    char *substr = malloc((strlen(tmp) + 1) * sizeof(char));
 
-void send_to_client(int client_socket, char* request_path, char* ext) {
-    int i = 0;
-    while (inf[i].ext) {
-        if (strcmp(inf[i].ext, ext) != 0) {
-            i++;
-        } else {
-            break;
+    for (int i = 0; i < strlen(tmp); i++) {
+        substr[i] = name[i];
+    }
+    substr[strlen(tmp)] = '\0';
+
+    if (!strcmp(substr, tmp)) {
+        char **fnames = malloc(sizeof(char*));
+        char bin[30];
+        bin[0] = '.';
+        int cnt1;
+        int cnt2;
+        for (cnt1 = 1, cnt2 = 0; name[cnt2]!= '?'; cnt1++, cnt2++)
+          bin[cnt1] = name[cnt2];
+        bin[cnt1] = '\0';
+        fnames[0] = malloc((strlen(bin) + 1) * sizeof(char));
+        for (int cnt = 0; cnt < strlen(bin); cnt++) {
+          fnames[0][cnt] = bin[cnt];
         }
-    }
-    if (!inf[i].ext) {
-        puts("NOT FOUND");
-        do_if_error(client_socket);
-        return;
-    }
-    int fd =  open(request_path + 1, O_RDONLY);
-    puts(request_path + 1);
-    if (fd < 0) {
-        puts("NOT FOUND");
-        do_if_error(client_socket);
-        return;
+        fnames[0][strlen(bin)] = '\0';
+        int words = 1;
+        char buf[100];
+        int bufSize = 0;
+        int i = strlen(tmp);
+        char cgi[] = "cgi-bin/";
+
+        if (strlen(name) > strlen(tmp)) {
+            while (name[i] != '\0') {
+                if (name[i] != '?') {
+                    buf[bufSize] = name[i];
+                    bufSize++;
+                } else {
+                    buf[bufSize] = '\0';
+                    words++;
+                    fnames = realloc(fnames, words * sizeof(char*));
+                    int wordSize = bufSize + strlen(cgi);
+                    char *word = malloc((wordSize + 1) * sizeof(char));
+                    int j = 0;
+                    for (; j < strlen(cgi); j++) {
+                        word[j] = cgi[j];
+                    }
+                    for (int k = 0; j < wordSize; j++,k++) {
+                        word[j] = buf[k];
+                    }
+                    word[wordSize] = '\0';
+                    fnames[words-1] = word;
+
+                    bufSize = 0;
+                }
+                i++;
+            }
+            buf[bufSize] = '\0';
+            words++;
+            fnames = realloc(fnames, words * sizeof(char*));
+            int wordSize = bufSize + strlen(cgi);
+            char *word = malloc((wordSize + 1) * sizeof(char));
+            int j = 0;
+            for (; j < strlen(cgi); j++) {
+                word[j] = cgi[j];
+            }
+            for (int k = 0; j < wordSize; j++,k++) {
+                word[j] = buf[k];
+            }
+            word[wordSize] = '\0';
+            fnames[words-1] = word;
+
+        }
+        words++;
+
+        fnames = realloc(fnames, words * sizeof(char*));
+        fnames[words - 1] = NULL;
+        free(substr);
+        return fnames;
     } else {
-        do_if_success(client_socket, fd, i);
+        free(substr);
+        return NULL;
     }
-
-    close(fd);
 }
 
-void do_if_success(int client_socket, int fd, int index) {
-    char h1[] = "HTTP/1.1 404\r\ncontent-type: text/html\r\ncontent-length: %d\r\n\r\n";
-    char h2[] = "<!DOCTYPE html><html><h1>";
-    char h3[] = "</h1></html>";
-    int size = 0; 
-    char* buf = NULL;
-    char message[100];
-    char ch;
-    while (read(fd, &ch, 1) > 0) {
-        size++;
-        buf = realloc(buf, size * sizeof(char));
-        buf[size-1] = ch;
-    }
-    size++;
-    buf = realloc(buf, size * sizeof(char));
-    buf[size-1] = '\0';
-    sprintf(message, h1, inf[index].mediatype, strlen(h2) + strlen(buf) + strlen(h3));
-    write(client_socket, message, strlen(message));
-    write(client_socket, h2, strlen(h2));
-    write(client_socket, buf, strlen(buf));
-    write(client_socket, h3, strlen(h3));
-    free(buf);
-}
-
-void do_if_error(int client_socket) {
-    char h1[] = "HTTP/1.1 404\r\n\r\n";
-    write(client_socket, h1, strlen(h1));
-}
-
-char* get_path(char* message) {
-    char *req;
-    req = strtok(message, " \r\n");
-    req = strtok(NULL, " \r\n");
-    puts(req);
-    return req;
-}
-
-int main(int argc, char** argv) {
-    if (argc != 3) {
-        puts("Incorrect args.");
-        puts("./server <port> <number_of_clients>");
-        puts("Example:");
-        puts("./server 8080 1");
-        return ERR_INCORRECT_ARGS;
-    }
-    int port = atoi(argv[1]);
-    int server_socket = init_socket(port);
-    puts("Wait for connection");
-    struct sockaddr_in client_address;
-    socklen_t size = sizeof(client_address);
-    int clients = atoi(argv[2]);
-    int *client_socket = malloc(clients * sizeof(int));
-    for (int i = 0; i < clients; i++) {
-        client_socket[i] = accept(server_socket, 
-                           (struct sockaddr *) &client_address,
-                           &size);
-        printf("Client %d connected:\n", i+1);
-        if (fork() == 0) {
-            interaction_client(client_socket[i]);
-            exit(0);
+void cleaner(char **fname) {
+    if (fname != NULL) {
+        int i = 0;
+        while (fname[i] != NULL) {
+            free(fname[i]);
+            i++;
         }
-        close(client_socket[i]);
+        free(fname);
     }
-    for (int i = 0; i < clients; i++) {
-        wait(NULL);
+}
+
+char* naming2(char *pname) {
+    char *fname = malloc(100 * sizeof(char));
+    fname[0] = '.';
+    int i;
+    int j;
+    for (i = 0, j = 1; pname[i]!= '\n'; i++, j++) {
+        fname[j] = pname[i];
     }
-    free(client_socket);
-    return OK;
+    return fname;
+}
+
+//"./cgi-bin/prog"
+char *naming3(char *name) {
+    char *fname = malloc(20);
+    fname[0] = '.';
+    int i;
+    int j;
+    for (i = 1, j = 0; name[j]!= '?'; i++, j++)
+        fname[i] = name[j];
+    fname[i] = '\0';
+    return fname;
+}
+
+void respond(int n) {
+    char mesg[MESSAGE], *reqline[3], data_to_send[BYTES], path[MESSAGE];
+    int rcvd, fd, bytes_read;
+    memset((void*)mesg, (int)'\0', MESSAGE);
+    rcvd=recv(client_socket[n], mesg, MESSAGE, 0);
+    if (rcvd < 0)
+        fprintf(stderr,("recv() error\n"));
+    else if (rcvd == 0)
+        fprintf(stderr,"Client disconnected upexpectedly.\n");
+    else {
+        printf("msg : %s", mesg);
+        reqline[0] = strtok (mesg, " \t\n");
+        if ( strncmp(reqline[0], "GET\0", 4) == 0) {
+            reqline[1] = strtok (NULL, " \t");
+            reqline[2] = strtok (NULL, " \t\n");
+            if ( strncmp( reqline[2], "HTTP/1.0", 8) !=0 && strncmp( reqline[2], "HTTP/1.1", 8) !=0 )
+                write(client_socket[n], "HTTP/1.0 400 Bad Request\n", 25);
+            else {
+                if (strncmp(reqline[1], "/\0", 2) == 0)
+                    reqline[1] = "/index.html";
+            strcpy(path, ROOT);
+            strcpy(&path[strlen(ROOT)], reqline[1]);
+                if (strncmp(reqline[1] , "/cgi-bin/", 9) == 0) {
+                    pid_t pid;
+                    char **name, *name2, *name3;
+                if ((pid = fork()) == 0) {
+                    name2 = naming2(reqline[1]);
+                    name = foo(reqline[1]);
+                    fd = open("cgi.txt", O_WRONLY|O_TRUNC|O_CREAT,
+                                          S_IREAD|S_IWRITE);
+                    dup2(fd, 1);
+                if (name == NULL) {
+                    execlp(name2 , name2 ,NULL);
+                }
+                else {
+                    name3 = naming3(reqline[1]);
+                    execvp(name3 , name);
+                }
+          }
+          waitpid(pid, 0, 0);
+          fd = open("cgi.txt", O_RDONLY);
+          send(client_socket[n], "HTTP/1.0 200 OK\n\n", 17, 0);
+					while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
+					     write (client_socket[n], data_to_send, bytes_read);
+          close(fd);
+          free(name3);
+          cleaner(name);
+          free(name2);
+        }
+				else if ((fd = open(path, O_RDONLY)) != -1)
+				{
+					send(client_socket[n], "HTTP/1.0 200 OK\n\n", 17, 0);
+					while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
+					write (client_socket[n], data_to_send, bytes_read);
+			}
+		else write(client_socket[n], "HTTP/1.0 500 Not Found\n", 23);
+			}
+		}
+	}
+	shutdown (client_socket[n], SHUT_RDWR);
+	close(client_socket[n]);
+	client_socket[n]=-1;
 }

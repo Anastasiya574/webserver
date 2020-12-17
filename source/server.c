@@ -29,9 +29,9 @@ char *ROOT;
 int listenfd, client_socket[CONNMAX];
 void error(char *);
 void freelist(char **);
-char* naming3(char * );
+char* get_binary(char * );
 char* naming2(char *);
-char** foo(char *);
+char** run(char *);
 void init_socket(char *);
 void respond(int);
 
@@ -130,7 +130,7 @@ void init_socket(int port) {
     return;
 } */
 
-char** foo(char *name) {
+char** run(char *name) {
     char tmp[] = "/cgi-bin/prog?";
     if (strlen(tmp) >= strlen(name)) {
         return 0;
@@ -238,8 +238,7 @@ char* naming2(char *pname) {
     return fname;
 }
 
-//"./cgi-bin/prog"
-char *naming3(char *name) {
+char *get_binary(char *name) {
     char *fname = malloc(20);
     fname[0] = '.';
     int i;
@@ -266,7 +265,7 @@ void respond(int n) {
             reqline[1] = strtok (NULL, " \t");
             reqline[2] = strtok (NULL, " \t\n");
             if ( strncmp( reqline[2], "HTTP/1.0", 8) !=0 && strncmp( reqline[2], "HTTP/1.1", 8) !=0 )
-                write(client_socket[n], "HTTP/1.0 400 Bad Request\n", 25);
+                write(client_socket[n], "HTTP/1.0 404 Bad Request\n", 25);
             else {
                 if (strncmp(reqline[1], "/\0", 2) == 0)
                     reqline[1] = "/index.html";
@@ -285,7 +284,7 @@ void respond(int n) {
                     execlp(name2 , name2 ,NULL);
                 }
                 else {
-                    name3 = naming3(reqline[1]);
+                    name3 = get_binary(reqline[1]);
                     execvp(name3 , name);
                 }
           }
@@ -305,7 +304,7 @@ void respond(int n) {
 					while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
 					write (client_socket[n], data_to_send, bytes_read);
 			}
-		else write(client_socket[n], "HTTP/1.0 500 Not Found\n", 23);
+		else write(client_socket[n], "HTTP/1.1 404\n", 23);
 			}
 		}
 	}

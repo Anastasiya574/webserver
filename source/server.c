@@ -36,19 +36,20 @@ void init_socket(char *);
 void respond(int);
 
 int main(int argc, char* argv[]) {
-    if (argc != 1) {
+    if (argc != 2) {
         puts("Incorrect args.");
-        puts("./server");
+        puts("./server <port>");
         puts("Example:");
-        puts("./server");
+        puts("./server 5000");
         return ERR_INCORRECT_ARGS;
     }
 	struct sockaddr_in client_address;
 	socklen_t addrlen;
-    char port[6];
-    strcpy(port, "5000");
+        char *port = argv[1];
+        //sprintf(port, "%d", pt);
+        //strcpy(port, "5000");
 	ROOT = getenv("PWD");
-    int slot=0;
+        int slot=0;
 	int i;
 	for (i=0; i<CONNMAX; i++)
 	client_socket[i]=-1;

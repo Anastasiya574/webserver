@@ -5,10 +5,10 @@ bin:
 	mkdir resource/cgi-bin
 
 bin/server: source/server.c
-	gcc source/server.c -o bin/server -Wall -Werror -lm -fsanitize=address,leak
+	gcc source/server.c -o bin/server
 
 bin/client: source/client.c
-	gcc source/client.c -o bin/client -Wall -Werror -lm -fsanitize=address,leak
+	gcc source/client.c -o bin/client
 
 clean:
 	rm bin/server bin/client

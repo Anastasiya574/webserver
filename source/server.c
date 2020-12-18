@@ -60,10 +60,8 @@ int main(int argc, char* argv[]) {
 		client_socket[slot] = accept (listenfd, (struct sockaddr *) &client_address, &addrlen);
 		if (client_socket[slot] < 0)
 			error ("accept() error");
-		else
-		{
-			if (fork() == 0)
-			{
+		else {
+			if (fork() == 0) {
 				respond(slot);
 				exit(0);
 			}
@@ -258,7 +256,7 @@ void respond(int n) {
     if (rcvd < 0)
         fprintf(stderr,("recv() error\n"));
     else if (rcvd == 0)
-        fprintf(stderr,"Client disconnected upexpectedly.\n");
+        fprintf(stderr,"Client connected\n");
     else {
         printf("msg : %s", mesg);
         reqline[0] = strtok (mesg, " \t\n");

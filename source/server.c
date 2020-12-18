@@ -276,7 +276,7 @@ void respond(int n) {
                     char **name, *name2, *name3;
                 if ((pid = fork()) == 0) {
                     name2 = naming2(reqline[1]);
-                    name = foo(reqline[1]);
+                    name = run(reqline[1]);
                     fd = open("cgi.txt", O_WRONLY|O_TRUNC|O_CREAT,
                                           S_IREAD|S_IWRITE);
                     dup2(fd, 1);

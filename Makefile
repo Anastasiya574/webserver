@@ -1,4 +1,4 @@
-all: bin bin/server bin/client resource/cgi-bin/hello-world
+all: bin bin/server bin/client resource/cgi-bin/hello-world resource/cgi-bin/query-test
 	
 bin:
 	mkdir bin
@@ -16,3 +16,6 @@ clean:
 
 resource/cgi-bin/hello-world: resource/cgi-source/hello-world.c
 	gcc resource/cgi-source/hello-world.c -o resource/cgi-bin/hello-world -Wall -Werror -lm -fsanitize=address,leak
+
+resource/cgi-bin/query-test: resource/cgi-source/query-test.c
+	gcc resource/cgi-source/query-test.c -o resource/cgi-bin/query-test -Wall -Werror -lm -fsanitize=address,leak

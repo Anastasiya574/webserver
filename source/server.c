@@ -1,20 +1,16 @@
-#include<stdio.h>
-#include<string.h>
-#include<stdlib.h>
-#include<unistd.h>
-#include<sys/types.h>
-#include<sys/stat.h>
-#include<sys/socket.h>
-#include<arpa/inet.h>
-#include<netdb.h>
-#include<signal.h>
-#include<fcntl.h>
-#include<time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <unistd.h>
 #include <sys/wait.h>
-
-#define MESSAGE 10000
-#define CONNMAX 1000
-#define BYTES 1024
+#include <sys/sendfile.h>
 
 enum errors {
     OK,
@@ -25,289 +21,336 @@ enum errors {
     ERR_LISTEN
 };
 
-char *ROOT;
-int listenfd, client_socket[CONNMAX];
-void error(char *);
-void freelist(char **);
-char* get_binary(char * );
-char* naming2(char *);
-char** run(char *);
-void init_socket(char *);
-void respond(int);
+enum types {
+    TEXT,
+    BINARY,
+    MULTIMEDIA
+};
 
-int main(int argc, char* argv[]) {
-    if (argc != 2) {
+char HEADER[] = "HTTP/1.1 ";
+char CONTENT_LENGTH[] = "content-length: ";
+char CONTENT_TYPE[] = "content-type: ";
+char END[] = "\r\n";
+char bad_request[] = "404\n";
+char good_request[] = "200\n";
+char TYPE_VALUE[1][100] = {"text/html\r\n"};
+
+int init_socket(int port);
+char *get_word(int client_socket);
+char *get_filename(int client_socket);
+int get_file_type(char *filename);
+char *get_file_size(char *filename);
+char *get_file_content(char *filename, int fd);
+char *push_back(char *dest, char *src);
+char *get_value(char *filename, int *i);
+char **do_query(char *filename);
+int free_values(char **values);
+void print_values(char **values);
+void send_text(int client_socket, char *filename);
+void send_bin(int client_socket, char *filename);
+void send_multimedia(int client_socket, char *filename);
+void run(int client_socket);
+
+int main(int argc, char** argv) {
+    struct sockaddr_in client_address;
+    socklen_t size = sizeof client_address;
+    if (argc != 3) {
         puts("Incorrect args.");
-        puts("./server <port>");
+        puts("./server <port> <client_number>");
         puts("Example:");
-        puts("./server 5000");
+        puts("./server 8080 1");
         return ERR_INCORRECT_ARGS;
     }
-	struct sockaddr_in client_address;
-	socklen_t addrlen;
-        char *port = argv[1];
-        //sprintf(port, "%d", pt);
-        //strcpy(port, "5000");
-	ROOT = getenv("PWD");
-        int slot=0;
-	int i;
-	for (i=0; i<CONNMAX; i++)
-	client_socket[i]=-1;
-	init_socket(port);
-	while (1)
-	{
-		addrlen = sizeof(client_address);
-		client_socket[slot] = accept (listenfd, (struct sockaddr *) &client_address, &addrlen);
-		if (client_socket[slot] < 0)
-			error ("accept() error");
-		else {
-			if (fork() == 0) {
-				respond(slot);
-				exit(0);
-			}
-		}
-		while (client_socket[slot]!=-1) slot = (slot+1)%CONNMAX;
-	}
-	return OK;
+    int port = atoi(argv[1]);
+    int client_num = atoi(argv[2]);
+    int server_socket = init_socket(port);
+    int client_socket;
+    for (int i = 0 ; i < client_num ; i++) {
+        while (1) {
+            puts("wait for connection");
+            client_socket = accept(server_socket,
+                            (struct sockaddr *) &client_address,
+                            &size);
+            printf("connected: %s %d\n", inet_ntoa(client_address.sin_addr),
+                            ntohs(client_address.sin_port));
+            int pid = fork();
+            if (pid == 0) {
+                run(client_socket);
+            } else {
+                wait(NULL);
+            }
+            close(client_socket);
+        }
+    }
+    return OK;
 }
 
-void init_socket(char *port) {
-	struct addrinfo hints, *res, *p;
-	memset (&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_PASSIVE;
-	if (getaddrinfo( NULL, port, &hints, &res) != 0) {
-		perror ("getaddrinfo() error");
-		exit(1);
-	}
-	// socket and bind
-	for (p = res; p!=NULL; p=p->ai_next) {
-		listenfd = socket (p->ai_family, p->ai_socktype, 0);
-		if (listenfd == -1) continue;
-		if (bind(listenfd, p->ai_addr, p->ai_addrlen) == 0) break;
-	}
-	if (p==NULL) {
-		perror ("socket() or bind()");
-		exit(1);
-	}
-	freeaddrinfo(res);
-	if ( listen (listenfd, 100000) != 0 ) {
-		perror("listen() error");
-		exit(1);
-	}
-}
-/*
-void init_socket(int port) {
-    int server_socket, socket_option = 1;
-    struct sockaddr_in server_address;
-    //open socket, return socket descriptor
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+int init_socket(int port) {
+    // open socket, return socket descriptor
+    int server_socket = socket(PF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
         perror("Fail: open socket");
-        exit(ERR_SOCKET);
+        _exit(ERR_SOCKET);
     }
-    //set socket option
-    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &socket_option, (socklen_t) sizeof socket_option);
+    // set socket option
+    int socket_option = 1;
+    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &socket_option,
+              (socklen_t) sizeof(socket_option));
     if (server_socket < 0) {
         perror("Fail: set socket options");
-        exit(ERR_SETSOCKETOPT);
+        _exit(ERR_SETSOCKETOPT);
     }
-    //set socket address
+    // set socket address
+    struct sockaddr_in server_address;
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(port);
     server_address.sin_addr.s_addr = INADDR_ANY;
-    if (bind(server_socket, (struct sockaddr *) &server_address, (socklen_t) sizeof server_address) < 0) {
+    if (bind(server_socket, (struct sockaddr *) &server_address,
+       (socklen_t) sizeof(server_address)) < 0) {
         perror("Fail: bind socket address");
-        exit(ERR_BIND);
+        _exit(ERR_BIND);
     }
-    //listen mode start
+    // listen mode start
     if (listen(server_socket, 5) < 0) {
         perror("Fail: bind socket address");
-        exit(ERR_LISTEN);
+        _exit(ERR_LISTEN);
+    }
+    return server_socket;
+}
+
+char *get_word(int client_socket) {
+    char *word = NULL;
+    char ch;
+    int size = 0;
+    for (read(client_socket, &ch, 1);
+                ch != ' ' && ch != '\n' && ch != '\0';
+                read(client_socket, &ch, 1)) {
+        size++;
+        word = realloc(word, (size + 1) * sizeof(char));
+        word[size - 1] = ch;
+    }
+    if (word)
+        word[size] = '\0';
+    return word;
+}
+
+char *get_filename(int client_socket) {
+    char *filename;
+    char *message = get_word(client_socket);
+    if (strcmp("GET", message) ) { 
+        perror("incorrect query");
+    }
+    free(message);   
+    filename = get_word(client_socket);
+    message = get_word(client_socket);
+    free(message);
+    message = get_word(client_socket);
+    if (strcmp("Host:", message)) {
+        perror("incorrect query");
+    }
+    free(message);
+    message = get_word(client_socket);
+    free(message);
+    return filename;
+}
+
+int get_file_type(char *filename) {
+    if (!filename ) {
+        return -1;
+    }
+    int i;
+    for (i = 0; filename[i]; i++) {
+        if (filename[i] == '.') {
+            if (!strcmp(filename + i, ".png") ||
+                !strcmp(filename + i, ".jpg")) {
+                printf("multimedia\n");
+                return MULTIMEDIA;
+            }
+            if (!strcmp(filename + i, ".html") || !strcmp(filename + i, ".txt")) {
+                printf("html/txt\n");
+                return TEXT;
+            }
+        }
+    }
+    return BINARY;
+}
+
+char *push_back(char *dest, char *src) {
+    dest = realloc(dest, sizeof(char) * (strlen(dest) + strlen(src) - 1));
+    strcat(dest, src);
+    return dest;
+}
+
+char *get_file_size(char *filename) {
+    char *answ = NULL;
+    struct stat stats;
+    if (stat(filename, &stats) != 0) {
+        perror("stat failed");
+    }
+    long size = stats.st_size;
+    int length = 0;
+    for (int size_copy = size; size_copy; length++) {
+        size_copy /= 10;
+    }
+    answ = malloc(length);
+    sprintf(answ, "%ld", size);
+    answ = push_back(answ, END);
+    return answ;
+}
+
+char *get_file_content(char *filename, int fd) {
+    struct stat stats;
+    stat(filename, &stats);
+    char *buff = malloc(stats.st_size);
+    read(fd, buff, stats.st_size);
+    return buff;
+}
+
+char *get_value(char *filename, int *i) {
+    char *answ = NULL;
+    int size = 0;
+    for ( ; (filename[*i] != '\0') && (filename[*i] != '=') && (filename[*i] != '&') ; (*i)++ ) {
+        size++;
+        answ = realloc(answ, size + 1);
+        answ[size - 1] = filename[*i];
+    }
+    answ[size] = '\0';
+    return answ;
+}
+
+char **do_query(char *filename) {
+    int i = 0;
+    for ( ; filename[i] != '\0' && filename[i] != '?'; i++) {
+    }
+    int filesize = strlen(filename);
+    if (filename[i] == '?') {
+        filename[i] = '\0';
+    }
+    i++;
+    int size = 1;
+    char **answ = malloc(sizeof(char *) * 2);
+    answ[0] = malloc(strlen(filename));
+    strcpy(answ[0], filename);
+    for ( ; i < filesize ; ) {
+        size++;
+        answ = realloc(answ, sizeof(char *) * (size + 1));
+        answ[size - 1] = get_value(filename, &i);
+        i++;
+    }
+    answ[size] = NULL;
+    return answ;
+}
+
+int free_values(char **values) {
+    for (int i = 0; values[i]; i++)
+        free(values[i]);
+    free(values);
+    return 1;
+}
+
+void print_values(char **values) {
+    for (int i = 0; values[i]; i++)
+        printf("\n%s\n", values[i]);
+    return;
+}
+
+void send_text(int client_socket, char *filename) {
+    int fd = open(filename, O_RDONLY, 0);
+    char *answ = NULL;
+    if (fd < 0) {
+        write(client_socket, HEADER, strlen(HEADER));
+        write(client_socket, bad_request, strlen(bad_request));
+        close(fd);
+        return;
+    }
+    char *size_string = get_file_size(filename);
+    char *content = get_file_content(filename, fd);
+    answ = malloc(strlen(HEADER));
+    strcpy(answ, HEADER);
+    write(client_socket, good_request, strlen(good_request));
+    write(client_socket, CONTENT_TYPE, strlen(CONTENT_TYPE));
+    write(client_socket, TYPE_VALUE[0], strlen(TYPE_VALUE[0]));
+    write(client_socket, CONTENT_LENGTH, strlen(CONTENT_LENGTH));
+    write(client_socket, size_string, strlen(size_string));
+    write(client_socket, END, strlen(END));
+    write(client_socket, content, strlen(content));
+    free(size_string);
+    free(content);
+    close(fd);
+    return;
+}
+
+void send_bin(int client_socket, char *filename) {
+    char **values = do_query(filename);
+    print_values(values);
+    int fd = (filename, O_RDONLY, 0);
+    if (fd < 0) {
+        write(client_socket, HEADER, strlen(HEADER));
+        write(client_socket, bad_request, strlen(bad_request));
+        free_values(values);
+        return;
+    }
+    write(client_socket, HEADER, strlen(HEADER));
+    write(client_socket, good_request, strlen(good_request));
+    write(client_socket, CONTENT_TYPE, strlen(CONTENT_TYPE));
+    write(client_socket, TYPE_VALUE[0], strlen(TYPE_VALUE[0]));
+    int pid = fork();
+    if (pid == 0) {
+        dup2(client_socket, 1);
+        execv(filename, values);
+        exit(0);
+    } else {
+        wait(NULL);
+    }
+    free_values(values);
+    close(fd);
+    return;
+}
+
+void send_multimedia(int client_socket, char *filename) {
+    int fd = open(filename, O_RDONLY, 0);
+    if (fd < 0) {
+        write(client_socket, HEADER, strlen(HEADER));
+        write(client_socket, bad_request, strlen(bad_request));
+        close(fd);
+        return;
+    }
+    write(client_socket, HEADER, strlen(HEADER));
+    write(client_socket, good_request, strlen(good_request));
+    write(client_socket, CONTENT_TYPE, strlen(CONTENT_TYPE));
+    write(client_socket, "image/", strlen("image/"));
+    int i = 0;
+    for ( ; filename[i] != '.' ;i++) {
+    }
+    write(client_socket, filename + i + 1, strlen(filename + i + 1));
+    write(client_socket, END, strlen(END));
+    write(client_socket, CONTENT_LENGTH, strlen(CONTENT_LENGTH));
+    write(client_socket, get_file_size(filename), strlen(get_file_size(filename)));
+    write(client_socket, END, strlen(END));
+    close(fd);
+    return;
+}
+
+void run(int client_socket) {
+    char *filename = get_filename(client_socket);
+    int file_type = get_file_type(filename);
+    if (file_type == TEXT) {
+        send_text(client_socket, (filename + 1));
+        free(filename);
+        return;
+    }
+    if (file_type == MULTIMEDIA) {
+        send_multimedia(client_socket, (filename + 1));
+        int fd = open(filename + 1, O_RDONLY, 0);
+        while(sendfile(client_socket, fd, 0, 1)) {
+        }
+        free(filename);
+        return;
+    }
+    if (file_type == BINARY) {
+        send_bin(client_socket, filename + 1);
+        free(filename);
+        return;
     }
     return;
-} */
-
-char** run(char *name) {
-    char tmp[] = "/cgi-bin/prog?";
-    if (strlen(tmp) >= strlen(name)) {
-        return 0;
-    }
-
-    char *substr = malloc((strlen(tmp) + 1) * sizeof(char));
-
-    for (int i = 0; i < strlen(tmp); i++) {
-        substr[i] = name[i];
-    }
-    substr[strlen(tmp)] = '\0';
-
-    if (!strcmp(substr, tmp)) {
-        char **fnames = malloc(sizeof(char*));
-        char bin[30];
-        bin[0] = '.';
-        int cnt1;
-        int cnt2;
-        for (cnt1 = 1, cnt2 = 0; name[cnt2]!= '?'; cnt1++, cnt2++)
-          bin[cnt1] = name[cnt2];
-        bin[cnt1] = '\0';
-        fnames[0] = malloc((strlen(bin) + 1) * sizeof(char));
-        for (int cnt = 0; cnt < strlen(bin); cnt++) {
-          fnames[0][cnt] = bin[cnt];
-        }
-        fnames[0][strlen(bin)] = '\0';
-        int words = 1;
-        char buf[100];
-        int bufSize = 0;
-        int i = strlen(tmp);
-        char cgi[] = "cgi-bin/";
-
-        if (strlen(name) > strlen(tmp)) {
-            while (name[i] != '\0') {
-                if (name[i] != '?') {
-                    buf[bufSize] = name[i];
-                    bufSize++;
-                } else {
-                    buf[bufSize] = '\0';
-                    words++;
-                    fnames = realloc(fnames, words * sizeof(char*));
-                    int wordSize = bufSize + strlen(cgi);
-                    char *word = malloc((wordSize + 1) * sizeof(char));
-                    int j = 0;
-                    for (; j < strlen(cgi); j++) {
-                        word[j] = cgi[j];
-                    }
-                    for (int k = 0; j < wordSize; j++,k++) {
-                        word[j] = buf[k];
-                    }
-                    word[wordSize] = '\0';
-                    fnames[words-1] = word;
-
-                    bufSize = 0;
-                }
-                i++;
-            }
-            buf[bufSize] = '\0';
-            words++;
-            fnames = realloc(fnames, words * sizeof(char*));
-            int wordSize = bufSize + strlen(cgi);
-            char *word = malloc((wordSize + 1) * sizeof(char));
-            int j = 0;
-            for (; j < strlen(cgi); j++) {
-                word[j] = cgi[j];
-            }
-            for (int k = 0; j < wordSize; j++,k++) {
-                word[j] = buf[k];
-            }
-            word[wordSize] = '\0';
-            fnames[words-1] = word;
-
-        }
-        words++;
-
-        fnames = realloc(fnames, words * sizeof(char*));
-        fnames[words - 1] = NULL;
-        free(substr);
-        return fnames;
-    } else {
-        free(substr);
-        return NULL;
-    }
-}
-
-void cleaner(char **fname) {
-    if (fname != NULL) {
-        int i = 0;
-        while (fname[i] != NULL) {
-            free(fname[i]);
-            i++;
-        }
-        free(fname);
-    }
-}
-
-char* naming2(char *pname) {
-    char *fname = malloc(100 * sizeof(char));
-    fname[0] = '.';
-    int i;
-    int j;
-    for (i = 0, j = 1; pname[i]!= '\n'; i++, j++) {
-        fname[j] = pname[i];
-    }
-    return fname;
-}
-
-char *get_binary(char *name) {
-    char *fname = malloc(20);
-    fname[0] = '.';
-    int i;
-    int j;
-    for (i = 1, j = 0; name[j]!= '?'; i++, j++)
-        fname[i] = name[j];
-    fname[i] = '\0';
-    return fname;
-}
-
-void respond(int n) {
-    char mesg[MESSAGE], *reqline[3], data_to_send[BYTES], path[MESSAGE];
-    int rcvd, fd, bytes_read;
-    memset((void*)mesg, (int)'\0', MESSAGE);
-    rcvd=recv(client_socket[n], mesg, MESSAGE, 0);
-    if (rcvd < 0)
-        fprintf(stderr,("recv() error\n"));
-    else if (rcvd == 0)
-        fprintf(stderr,"Client connected\n");
-    else {
-        printf("msg : %s", mesg);
-        reqline[0] = strtok (mesg, " \t\n");
-        if ( strncmp(reqline[0], "GET\0", 4) == 0) {
-            reqline[1] = strtok (NULL, " \t");
-            reqline[2] = strtok (NULL, " \t\n");
-            if ( strncmp( reqline[2], "HTTP/1.0", 8) !=0 && strncmp( reqline[2], "HTTP/1.1", 8) !=0 )
-                write(client_socket[n], "HTTP/1.0 404 Bad Request\n", 25);
-            else {
-                if (strncmp(reqline[1], "/\0", 2) == 0)
-                    reqline[1] = "/index.html";
-            strcpy(path, ROOT);
-            strcpy(&path[strlen(ROOT)], reqline[1]);
-                if (strncmp(reqline[1] , "/cgi-bin/", 9) == 0) {
-                    pid_t pid;
-                    char **name, *name2, *name3;
-                if ((pid = fork()) == 0) {
-                    name2 = naming2(reqline[1]);
-                    name = run(reqline[1]);
-                    fd = open("cgi.txt", O_WRONLY|O_TRUNC|O_CREAT,
-                                          S_IREAD|S_IWRITE);
-                    dup2(fd, 1);
-                if (name == NULL) {
-                    execlp(name2 , name2 ,NULL);
-                }
-                else {
-                    name3 = get_binary(reqline[1]);
-                    execvp(name3 , name);
-                }
-          }
-          waitpid(pid, 0, 0);
-          fd = open("cgi.txt", O_RDONLY);
-          send(client_socket[n], "HTTP/1.0 200 OK\n\n", 17, 0);
-					while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
-					     write (client_socket[n], data_to_send, bytes_read);
-          close(fd);
-          free(name3);
-          cleaner(name);
-          free(name2);
-        }
-				else if ((fd = open(path, O_RDONLY)) != -1)
-				{
-					send(client_socket[n], "HTTP/1.0 200 OK\n\n", 17, 0);
-					while ((bytes_read = read(fd, data_to_send, BYTES)) > 0)
-					write (client_socket[n], data_to_send, bytes_read);
-			}
-		else write(client_socket[n], "HTTP/1.1 404\n", 23);
-			}
-		}
-	}
-	shutdown (client_socket[n], SHUT_RDWR);
-	close(client_socket[n]);
-	client_socket[n]=-1;
 }
